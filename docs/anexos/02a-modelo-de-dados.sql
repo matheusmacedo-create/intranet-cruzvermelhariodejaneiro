@@ -1,7 +1,7 @@
 -- Modelo de dados da intranet da CVB-RJ
 -- Anexo 02a do escopo (docs/02-escopo.md). Postgres 17 no Supabase.
 --
--- O QUE ISTO É
+-- O QUE ISTO E
 -- A proposta de schema que a Diretoria aprova junto do escopo. Antes de ir para
 -- producao ela e quebrada em migrations incrementais, uma por fase, na ordem da
 -- secao 13 do escopo. Migracao so acrescenta: nada aqui remove ou altera de forma
@@ -15,11 +15,12 @@
 -- anon, authenticated e service_role; schema auth com users e auth.uid(); pgcrypto,
 -- pg_trgm, unaccent e citext; substitutos para pg_cron e pg_net) e com as 21
 -- migrations da Redacao carregadas antes. Resultado: aplica do zero sem nenhum erro.
--- Estado depois de aplicar: 68 tabelas, 212 policies, 32 funcoes auxiliares em
--- private, 64 triggers e 316 indices, com RLS ligada em todas as tabelas.
--- Teste de fumaca da trilha: tres eventos gravados encadeiam, verificar_cadeia
--- devolve integra, adulteracao feita por dentro do banco derruba a verificacao, e
--- update e delete sao recusados pelo trigger para qualquer role.
+-- Estado depois de aplicar: 68 tabelas, mais de 200 policies, 32 funcoes auxiliares
+-- em private, dezenas de triggers e indices, com RLS ligada em todas as tabelas.
+-- A suite pgTAP do anexo 02b roda sobre este arquivo.
+-- Teste de fumaca da trilha: eventos gravados encadeiam, verificar_cadeia devolve
+-- integra, adulteracao feita por dentro do banco derruba a verificacao, e update e
+-- delete sao recusados pelo trigger para qualquer role.
 -- Duas ressalvas honestas: o cluster de conferencia e Postgres 16, nao 17, e o
 -- arquivo nao e idempotente, porque create policy nao aceita if not exists; rodar
 -- duas vezes no mesmo banco acusa policy repetida, o que nao acontece em migracao,
@@ -9417,13 +9418,6 @@ declare
   v_prazo_novo timestamptz;
   v_estado_venc text;
 begin
-  -- Papel institucional que exerce autorizacao.homologar: e para ele que a
-  -- ultima etapa se amplia quando nao ha para onde escalar.
-  select pp.papel into v_papel_homologa
-    from public.papel_permissoes pp
-   where pp.permissao = 'autorizacao.homologar'::public.permissao
-   order by pp.papel
-   limit 1;
   -- Lembrete: no dia util anterior ao vencimento e no dia do vencimento.
   for r in
     select e.*, a.workspace_id as ws, a.rodada, reg.fluxo_codigo
@@ -9507,6 +9501,27 @@ begin
         -- ampliado a quem exerce autorizacao.homologar, com quorum 1.
         v_prazo_novo := public.somar_dias_uteis(now(), 2);
 
+        -- Alcance: o papel da propria etapa quando ele ja exerce
+        -- autorizacao.homologar; se nao exercer, o papel de homologacao com
+        -- mais gente vigente, para que a etapa nao fique sem executor.
+        select case
+                 when exists (select 1 from public.papel_permissoes pp
+                               where pp.papel = r.papel_aprovador
+                                 and pp.permissao = 'autorizacao.homologar'::public.permissao)
+                 then r.papel_aprovador
+                 else (select pp.papel
+                         from public.papel_permissoes pp
+                         left join public.usuario_papeis up
+                                on up.papel = pp.papel
+                               and up.inicio <= now()
+                               and (up.fim is null or up.fim > now())
+                        where pp.permissao = 'autorizacao.homologar'::public.permissao
+                        group by pp.papel
+                        order by count(up.user_id) desc, pp.papel
+                        limit 1)
+               end
+          into v_papel_homologa;
+
         update public.autorizacao_etapas e
            set escalada_em = now(),
                prazo_em = v_prazo_novo,
@@ -9527,7 +9542,12 @@ begin
           select distinct up.user_id
             from public.usuario_papeis up
             join public.profiles pf on pf.id = up.user_id
-           where up.papel in (coalesce(v_papel_homologa, 'diretoria'), 'administrador')
+           where (
+                   exists (select 1 from public.papel_permissoes pp
+                            where pp.papel = up.papel
+                              and pp.permissao = 'autorizacao.homologar'::public.permissao)
+                   or up.papel = 'administrador'
+                 )
              and up.inicio <= now()
              and (up.fim is null or up.fim > now())
              and pf.desativado_em is null
@@ -9557,9 +9577,9 @@ begin
         jsonb_build_object('estado', 'open', 'ordem', r.ordem),
         case when v_proxima.id is not null
              then jsonb_build_object('estado', 'escalated', 'ordem', r.ordem)
-             else jsonb_build_object('estado', 'open', 'ordem', r.ordem,
-                                     'papel_aprovador', coalesce(v_papel_homologa, 'diretoria'),
-                                     'quorum', 1)
+             else jsonb_build_object('estado', 'open', 'ordem', r.ordem, 'quorum', 1,
+                                     'prazo_em', to_char(v_prazo_novo at time zone 'UTC',
+                                                         'YYYY-MM-DD"T"HH24:MI:SSOF'))
         end,
         r.hash_arquivo_submissao, v_hash_dec
       );
@@ -9846,11 +9866,13 @@ begin
     raise exception 'Documento nao encontrado.' using errcode = 'P0002';
   end if;
 
-  if not (
-    (select private.papel_na_pasta(v_pasta)) in ('revisor','editor')
+  -- coalesce porque private.papel_na_pasta devolve nulo para quem nao alcanca a
+  -- pasta, e nulo em condicao de recusa deixaria a porta aberta.
+  if not coalesce(
+    coalesce((select private.papel_na_pasta(v_pasta)), '') in ('revisor','editor')
     or (select public.autorizar('trilha.ler_completa'::public.permissao, null))
     or (select public.autorizar('operacao.administrar'::public.permissao, null))
-  ) then
+  , false) then
     raise exception 'A trilha do documento e de quem revisa ou edita a pasta, do auditor e do administrador.'
       using errcode = '42501';
   end if;
@@ -10219,9 +10241,11 @@ begin
   -- public.grupo_membros.user_id, public.aviso_leituras.user_id,
   -- public.autorizacoes.solicitante_id, public.assinaturas.signatario_id e
   -- public.convites.criado_por a referenciam com on delete restrict ou sem
-  -- clausula. competencias e interesses sao not null: voltam a lista vazia.
+  -- clausula. competencias e interesses sao not null e voltam a lista vazia;
+  -- full_name e username sao not null na tabela da Redacao e por isso recebem
+  -- marcador sem dado pessoal, derivado do uuid no caso do username.
   update public.profiles
-     set full_name = null, nome_social = null, email_contato = null, telefone = null,
+     set full_name = '[eliminado]', nome_social = null, email_contato = null, telefone = null,
          apresentacao = null, competencias = '{}', interesses = '{}', avatar_path = null,
          username = 'anon-' || left(p_user_id::text, 8)
    where id = p_user_id;
@@ -10244,11 +10268,12 @@ begin
   get diagnostics v_n = row_count;
   v_linhas := v_linhas + v_n;
 
-  -- 4. Mensagens diretas de que o titular e autor. O trigger
-  -- public.messages_so_lido_em() proibe alterar body, e por isso ele fica
-  -- desligado apenas durante esta transacao de anonimizacao.
+  -- 4. Mensagens diretas de que o titular e autor. public.messages.body e not
+  -- null, entao entra o mesmo marcador sem dado pessoal; o trigger
+  -- public.messages_so_lido_em() proibe alterar body, e por isso fica desligado
+  -- apenas durante esta transacao de anonimizacao.
   alter table public.messages disable trigger messages_so_lido_em;
-  update public.messages set body = null where author_id = p_user_id;
+  update public.messages set body = '[eliminado]' where author_id = p_user_id;
   get diagnostics v_n = row_count;
   v_linhas := v_linhas + v_n;
   alter table public.messages enable trigger messages_so_lido_em;
@@ -10282,7 +10307,7 @@ begin
   return v_linhas;
 end;
 $$;
-comment on function lgpd.anonimizar_titular(uuid) is 'Apaga IP, agente e motivo das tabelas apagaveis desta parte, marca profiles.eliminado_em e registra titular.anonimizado sem dado pessoal. Recusa quando ha retencao legal vigente, respondendo com a hipotese do art. 16. Mantem hash e UUID orfao na cadeia, procedimento de eliminacao de docs/04, secao 5.';
+comment on function lgpd.anonimizar_titular(uuid) is 'Atende ao pedido de eliminacao do titular (LGPD art. 18, VI). Exige o encarregado ou o administrador, em sessao com segundo fator. Recusa enquanto houver retencao legal vigente, respondendo com a hipotese do art. 16, e ignora tipo documental com prazo ainda pendente de decisao da Diretoria. Onde a coluna aceita nulo, apaga; onde e obrigatoria (nome, corpo de mensagem, e-mail de convite), grava marcador sem dado pessoal, e o nome de usuario vira anon mais um identificador curto. O que sobra na cadeia de auditoria e um identificador orfao e a impressao digital, nunca dado pessoal, conforme o procedimento de eliminacao de docs/04-rastreabilidade-blockchain.md, secao 6. Devolve quantas linhas foram tratadas e registra titular.anonimizado na trilha.';
 
 create or replace function lgpd.exportar_titular(p_user_id uuid)
 returns jsonb
