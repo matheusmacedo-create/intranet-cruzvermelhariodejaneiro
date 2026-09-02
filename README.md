@@ -11,6 +11,15 @@ Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi c
 | [`docs/03-bases-recomendadas.md`](docs/03-bases-recomendadas.md) | Pesquisa de bases públicas consolidadas (82 candidatos, 50 com ficha técnica: projetos do Movimento Cruz Vermelha, intranets open source, gestão documental e assinatura, referências brasileiras e legais) e a recomendação verificada de em qual construir | pronto |
 | [`docs/04-rastreabilidade-blockchain.md`](docs/04-rastreabilidade-blockchain.md) | Existe projeto público de intranet rastreada por blockchain? O que existe de consolidado, precedentes do Movimento, validade jurídica no Brasil, LGPD e o desenho progressivo de rastreabilidade sobre o Supabase | pronto |
 
+### Anexos
+
+| Anexo | O que é |
+| --- | --- |
+| [`docs/anexos/03a-fichas-dos-candidatos.md`](docs/anexos/03a-fichas-dos-candidatos.md) | Ficha técnica dos 50 candidatos avaliados: notas por critério, licença conferida, o que reaproveitar, o que não serve, veredito |
+| [`docs/anexos/03b-julgamentos.md`](docs/anexos/03b-julgamentos.md) | Os três julgamentos independentes (direção da filial, arquitetura e manutenção, coordenação de voluntariado): ranking, estratégia, descartes e lacunas |
+| [`docs/anexos/03c-verificacao.md`](docs/anexos/03c-verificacao.md) | Refutação adversarial da primeira versão da recomendação (capacidade, operação, adoção e instituição) e o que mudou na revisão |
+| [`docs/anexos/03d-estudos-casos-e-normas.md`](docs/anexos/03d-estudos-casos-e-normas.md) | Casos de intranets e portais de Sociedades Nacionais, guias da IFRC, normas brasileiras e estudos sobre intranets consultados |
+
 ## Sistemas irmãos
 
 - [redacao-cruzvermelhariodejaneiro](https://github.com/matheusmacedo-create/redacao-cruzvermelhariodejaneiro) — sistema editorial (pautas, aprovações, publicação, newsletter)
