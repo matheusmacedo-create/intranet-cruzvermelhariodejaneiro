@@ -7,7 +7,7 @@ Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi c
 | Documento | O que é | Estado |
 | --- | --- | --- |
 | [`docs/01-mapa-do-ecossistema.md`](docs/01-mapa-do-ecossistema.md) | O que já existe hoje: Redação, Cérebro, Curso de Punção Venosa/Secretaria, site institucional, Google Workspace, contas e limites, dores observadas | pronto |
-| `docs/02-escopo.md` | O escopo da intranet: contato entre colaboradores e voluntários, mural por setor, biblioteca de documentos e fluxo de autorização de documentos, construído sobre a base recomendada | em elaboração |
+| [`docs/02-escopo.md`](docs/02-escopo.md) | O escopo da intranet, documento de aprovação da Diretoria: os quatro espaços (contato, mural por setor, biblioteca, autorização de documentos), identidade e permissões, arquitetura e operação, fases, custos, riscos, critérios de aceite e 48 decisões pendentes | pronto |
 | [`docs/03-bases-recomendadas.md`](docs/03-bases-recomendadas.md) | Pesquisa de bases públicas consolidadas (82 candidatos, 50 com ficha técnica: projetos do Movimento Cruz Vermelha, intranets open source, gestão documental e assinatura, referências brasileiras e legais) e a recomendação verificada de em qual construir | pronto |
 | [`docs/04-rastreabilidade-blockchain.md`](docs/04-rastreabilidade-blockchain.md) | Existe projeto público de intranet rastreada por blockchain? O que existe de consolidado, precedentes do Movimento, validade jurídica no Brasil, LGPD e o desenho progressivo de rastreabilidade sobre o Supabase | pronto |
 
@@ -15,6 +15,8 @@ Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi c
 
 | Anexo | O que é |
 | --- | --- |
+| [`docs/anexos/02a-modelo-de-dados.sql`](docs/anexos/02a-modelo-de-dados.sql) | O modelo de dados proposto: tabelas, enums, funções auxiliares de RLS, policies, grants, triggers e seeds de catálogo |
+| [`docs/anexos/02b-testes.sql`](docs/anexos/02b-testes.sql) | Suíte pgTAP que prova os critérios de aceite de cada fase |
 | [`docs/anexos/03a-fichas-dos-candidatos.md`](docs/anexos/03a-fichas-dos-candidatos.md) | Ficha técnica dos 50 candidatos avaliados: notas por critério, licença conferida, o que reaproveitar, o que não serve, veredito |
 | [`docs/anexos/03b-julgamentos.md`](docs/anexos/03b-julgamentos.md) | Os três julgamentos independentes (direção da filial, arquitetura e manutenção, coordenação de voluntariado): ranking, estratégia, descartes e lacunas |
 | [`docs/anexos/03c-verificacao.md`](docs/anexos/03c-verificacao.md) | Refutação adversarial da primeira versão da recomendação (capacidade, operação, adoção e instituição) e o que mudou na revisão |
