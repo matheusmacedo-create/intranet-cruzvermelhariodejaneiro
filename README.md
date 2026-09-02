@@ -8,7 +8,7 @@ Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi c
 | --- | --- | --- |
 | [`docs/01-mapa-do-ecossistema.md`](docs/01-mapa-do-ecossistema.md) | O que já existe hoje: Redação, Cérebro, Curso de Punção Venosa/Secretaria, site institucional, Google Workspace, contas e limites, dores observadas | pronto |
 | `docs/02-escopo.md` | O escopo da intranet: contato entre colaboradores e voluntários, mural por setor, biblioteca de documentos e fluxo de autorização de documentos, construído sobre a base recomendada | em elaboração |
-| `docs/03-bases-recomendadas.md` | Pesquisa de bases públicas consolidadas (projetos do Movimento Cruz Vermelha, intranets open source, gestão documental, referências brasileiras) e a recomendação de em qual construir | em elaboração |
+| [`docs/03-bases-recomendadas.md`](docs/03-bases-recomendadas.md) | Pesquisa de bases públicas consolidadas (82 candidatos, 50 com ficha técnica: projetos do Movimento Cruz Vermelha, intranets open source, gestão documental e assinatura, referências brasileiras e legais) e a recomendação verificada de em qual construir | pronto |
 | [`docs/04-rastreabilidade-blockchain.md`](docs/04-rastreabilidade-blockchain.md) | Existe projeto público de intranet rastreada por blockchain? O que existe de consolidado, precedentes do Movimento, validade jurídica no Brasil, LGPD e o desenho progressivo de rastreabilidade sobre o Supabase | pronto |
 
 ## Sistemas irmãos
