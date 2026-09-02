@@ -6024,7 +6024,7 @@ grant execute on function public.pastas_recalcular_subarvore(uuid) to authentica
 -- ------------------------------------------------------------
 
 create or replace function public.documentos_valida_metadados()
-returns trigger language plpgsql set search_path = '' as $$
+returns trigger language plpgsql security definer set search_path = '' as $$
 declare
   v_tipo    public.tipos_documentais%rowtype;
   v_pasta   public.pastas%rowtype;
@@ -6322,7 +6322,7 @@ create trigger documentos_recalcula_nivel_da_pasta
 -- ------------------------------------------------------------
 
 create or replace function public.documento_versoes_numera()
-returns trigger language plpgsql set search_path = '' as $$
+returns trigger language plpgsql security definer set search_path = '' as $$
 declare
   v_doc public.documentos%rowtype;
   v_ha  boolean;
@@ -6434,7 +6434,7 @@ create trigger documento_versoes_uma_primaria
 -- ------------------------------------------------------------
 
 create or replace function public.pasta_permissoes_herda_espaco()
-returns trigger language plpgsql set search_path = '' as $$
+returns trigger language plpgsql security definer set search_path = '' as $$
 declare
   v_pasta public.pastas%rowtype;
   v_doc   public.documentos%rowtype;
@@ -6455,10 +6455,10 @@ end;
 $$;
 
 comment on function public.pasta_permissoes_herda_espaco() is
-  'Herda o espaco da pasta e exige que a excecao por documento aponte a pasta em que o documento esta, para que a cadeia de ancestrais continue coerente.';
+  'Herda o espaco da pasta e exige que a excecao por documento aponte a pasta em que o documento esta, para que a cadeia de ancestrais continue coerente. E security definer de proposito: como gatilho invoker ele lia public.documentos pela sessao de quem escreve, e o documento sigiloso nao aparece para quem ainda nao tem credencial nominal, entao a primeira concessao abortava aqui antes de a policy pasta_permissoes_insert_revisor ser avaliada, e o nivel sigiloso virava porta de mao unica. O gatilho so le e valida coerencia; quem decide se a pessoa pode conceder continua sendo a policy, que roda sobre a sessao real. Defeito encontrado pela suite pgTAP do anexo 02b.';
 
 create or replace function public.documento_links_recusa_sigiloso()
-returns trigger language plpgsql set search_path = '' as $$
+returns trigger language plpgsql security definer set search_path = '' as $$
 declare
   v_doc public.documentos%rowtype;
 begin
