@@ -1,14 +1,15 @@
 # Intranet — Cruz Vermelha Brasileira, Filial do Estado do Rio de Janeiro
 
-Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi construído ainda; o que existe aqui é o levantamento do ecossistema e o escopo completo do projeto, para aprovação antes da construção.
+Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi construído ainda. O foco desta etapa é a intranet em si: ambiente de contato entre colaboradores e voluntários, mural por setor, biblioteca de documentos e fluxo de autorização de documentos, construídos sobre uma base pública já consolidada. O que existe aqui é o levantamento, a pesquisa de bases e o escopo, para aprovação antes da construção.
 
 ## Documentos
 
-| Documento | O que é |
-| --- | --- |
-| [`docs/01-mapa-do-ecossistema.md`](docs/01-mapa-do-ecossistema.md) | O que já existe hoje: Redação, Cérebro, Curso de Punção Venosa/Secretaria, site institucional, Google Workspace, contas e limites, dores observadas |
-| [`docs/02-escopo.md`](docs/02-escopo.md) | O escopo mestre da intranet: perfis, mapa de espaços, arquitetura e infraestrutura, integrações, fases, riscos, critérios de aceite e decisões pendentes |
-| [`docs/anexos/`](docs/anexos/) | As seis propostas independentes que alimentaram a síntese e o julgamento do painel |
+| Documento | O que é | Estado |
+| --- | --- | --- |
+| [`docs/01-mapa-do-ecossistema.md`](docs/01-mapa-do-ecossistema.md) | O que já existe hoje: Redação, Cérebro, Curso de Punção Venosa/Secretaria, site institucional, Google Workspace, contas e limites, dores observadas | pronto |
+| `docs/02-escopo.md` | O escopo da intranet: contato entre colaboradores e voluntários, mural por setor, biblioteca de documentos e fluxo de autorização de documentos, construído sobre a base recomendada | em elaboração |
+| `docs/03-bases-recomendadas.md` | Pesquisa de bases públicas consolidadas (projetos do Movimento Cruz Vermelha, intranets open source, gestão documental, referências brasileiras) e a recomendação de em qual construir | em elaboração |
+| [`docs/04-rastreabilidade-blockchain.md`](docs/04-rastreabilidade-blockchain.md) | Existe projeto público de intranet rastreada por blockchain? O que existe de consolidado, precedentes do Movimento, validade jurídica no Brasil, LGPD e o desenho progressivo de rastreabilidade sobre o Supabase | pronto |
 
 ## Sistemas irmãos
 
