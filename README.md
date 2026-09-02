@@ -15,8 +15,8 @@ Repositório da intranet da CVB-RJ. **Estado atual: fase de escopo.** Nada foi c
 
 | Anexo | O que é |
 | --- | --- |
-| [`docs/anexos/02a-modelo-de-dados.sql`](docs/anexos/02a-modelo-de-dados.sql) | O modelo de dados proposto: tabelas, enums, funções auxiliares de RLS, policies, grants, triggers e seeds de catálogo |
-| [`docs/anexos/02b-testes.sql`](docs/anexos/02b-testes.sql) | Suíte pgTAP que prova os critérios de aceite de cada fase |
+| [`docs/anexos/02a-modelo-de-dados.sql`](docs/anexos/02a-modelo-de-dados.sql) | O modelo de dados: tabelas, funções auxiliares de segurança, policies, grants, triggers e seeds. Aplica do zero sem erro sobre o banco da Redação |
+| [`docs/anexos/02b-testes.sql`](docs/anexos/02b-testes.sql) | Suíte pgTAP com 508 testes, todos verdes, que prova os critérios de aceite de cada fase. Encontrou onze defeitos no modelo, quatro deles impeditivos |
 | [`docs/anexos/03a-fichas-dos-candidatos.md`](docs/anexos/03a-fichas-dos-candidatos.md) | Ficha técnica dos 50 candidatos avaliados: notas por critério, licença conferida, o que reaproveitar, o que não serve, veredito |
 | [`docs/anexos/03b-julgamentos.md`](docs/anexos/03b-julgamentos.md) | Os três julgamentos independentes (direção da filial, arquitetura e manutenção, coordenação de voluntariado): ranking, estratégia, descartes e lacunas |
 | [`docs/anexos/03c-verificacao.md`](docs/anexos/03c-verificacao.md) | Refutação adversarial da primeira versão da recomendação (capacidade, operação, adoção e instituição) e o que mudou na revisão |

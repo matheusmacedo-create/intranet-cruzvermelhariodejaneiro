@@ -17,7 +17,12 @@
 -- migrations da Redacao carregadas antes. Resultado: aplica do zero sem nenhum erro.
 -- Estado depois de aplicar: 68 tabelas, mais de 200 policies, 32 funcoes auxiliares
 -- em private, dezenas de triggers e indices, com RLS ligada em todas as tabelas.
--- A suite pgTAP do anexo 02b roda sobre este arquivo.
+-- A suite pgTAP do anexo 02b roda sobre este arquivo: 508 testes, todos verdes.
+-- Escrever aquela suite revelou onze defeitos que a leitura do codigo nao tinha
+-- pego, entre eles quatro que impediam o sistema de funcionar: documento sigiloso
+-- que ninguem conseguia liberar, aviso que nenhuma sessao conseguia alterar,
+-- trilha que recusava gravacao de usuario comum e pedido de autorizacao que nao
+-- nascia. Todos corrigidos aqui, cada um com comment on citando o numero do teste.
 -- Teste de fumaca da trilha: eventos gravados encadeiam, verificar_cadeia devolve
 -- integra, adulteracao feita por dentro do banco derruba a verificacao, e update e
 -- delete sao recusados pelo trigger para qualquer role.
@@ -404,6 +409,7 @@ set search_path = ''
 as $$
 declare
   v_somente_leitura boolean;
+  v_exclusivo       boolean;
   v_vigentes        integer;
   v_conflito        text;
 begin
@@ -414,6 +420,18 @@ begin
   if v_somente_leitura is null then
     return new;
   end if;
+
+  -- A secao 5.3 do escopo nomeia auditor e parceiro_externo como os dois papeis
+  -- mutuamente exclusivos com papel de escrita, e na mesma frase diz que
+  -- papeis.somente_leitura e verdadeiro para auditor. Ou seja: a marca da coluna
+  -- e lida, mas nao esgota a regra. Por isso a exclusividade e decidida aqui,
+  -- por marca da coluna ou por nome do papel, e o seed nao e mexido: marcar
+  -- parceiro_externo como somente_leitura contrariaria o texto do escopo, o
+  -- teste que confere a coluna papel a papel e o proprio seed, que da a
+  -- parceiro_externo a permissao de escrita autorizacao.assinar. Parceiro
+  -- externo nao e papel que so le; e papel que nao acumula.
+  v_exclusivo := coalesce(v_somente_leitura, false)
+                 or new.papel in ('auditor','parceiro_externo');
 
   -- Concessao que ja nasce encerrada nao disputa teto nem exclusividade.
   if new.fim is not null and new.fim <= now() then
@@ -439,14 +457,15 @@ begin
    where up.user_id = new.user_id
      and up.id <> new.id
      and (up.fim is null or up.fim > now())
-     and p.somente_leitura is distinct from v_somente_leitura
+     and (coalesce(p.somente_leitura, false)
+          or up.papel in ('auditor','parceiro_externo')) is distinct from v_exclusivo
    limit 1;
 
-  if v_conflito is not null and v_somente_leitura then
-    raise exception 'Exclusividade de papel: % e somente leitura e nao convive com o papel de escrita %, ja vigente para esta pessoa.', new.papel, v_conflito
+  if v_conflito is not null and v_exclusivo then
+    raise exception 'Exclusividade de papel: % nao acumula com papel de escrita e a pessoa ja tem o papel %, vigente.', new.papel, v_conflito
       using errcode = '23514';
   elsif v_conflito is not null then
-    raise exception 'Exclusividade de papel: % escreve e nao convive com o papel somente leitura %, ja vigente para esta pessoa.', new.papel, v_conflito
+    raise exception 'Exclusividade de papel: % escreve e nao convive com o papel %, que nao acumula e ja e vigente para esta pessoa.', new.papel, v_conflito
       using errcode = '23514';
   end if;
 
@@ -455,7 +474,7 @@ end;
 $$;
 
 comment on function public.validar_exclusividade_do_papel() is
-  'Aplica no banco duas regras que ate agora so estavam no texto: no maximo duas concessoes vigentes do papel administrador, e papel com public.papeis.somente_leitura verdadeiro mutuamente exclusivo com qualquer papel de escrita, de modo que auditor e parceiro_externo nao convivam com papel que escreve. Nao substitui public.validar_escopo_do_papel(), que continua conferindo escopo e atividade do papel.';
+  'Aplica no banco duas regras que ate agora so estavam no texto: no maximo duas concessoes vigentes do papel administrador, e exclusividade mutua entre papel que nao acumula e qualquer papel de escrita. Papel que nao acumula e o que tem public.papeis.somente_leitura verdadeiro ou cujo slug e auditor ou parceiro_externo. A versao anterior decidia so pela coluna somente_leitura, verdadeira apenas para auditor no seed, e por isso deixava parceiro_externo receber papel de escrita, contra a secao 5.3, que nomeia os dois. A correcao ficou aqui, na funcao, e nao no seed: a mesma secao 5.3 diz que somente_leitura e verdadeiro para auditor, um teste confere a coluna papel a papel, e parceiro_externo recebe no seed a permissao de escrita autorizacao.assinar, de modo que marcar a coluna nele seria dizer no banco algo que o escopo nao diz e que a matriz de permissoes desmente. Nao substitui public.validar_escopo_do_papel(), que continua conferindo escopo e atividade do papel. Defeito encontrado pela suite pgTAP do anexo 02b.';
 
 -- Membro Juvenil (16 a 18 anos) esta decidido como nao nesta rodada, entao o
 -- banco recusa a data de nascimento de quem ainda nao tem 18 anos.
@@ -597,7 +616,7 @@ comment on column public.papeis.escopo is
 comment on column public.papeis.exige_mfa is
   'true para administrador, diretoria, secretaria, auditor e encarregado. Quem recebe um desses e nao tem fator TOTP verificado le, mas nao decide: private.exige_aal2() barra a escrita de decisao. Coordenador, comunicacao e instrutor ficam em false: a obrigatoriedade para esses tres e decisao pendente da Diretoria, com prazo e comunicacao previos, e ate la o segundo fator e recomendado e cobrado na tela, nao exigido pelo banco. O motivo e operacional: coordenador costuma ser voluntario com aparelho proprio, e a exigencia trava a etapa 1 de todo tramite quando a pessoa troca de celular.';
 comment on column public.papeis.somente_leitura is
-  'true so para auditor. O papel le a trilha completa e nunca escreve.';
+  'true so para auditor, como diz a secao 5.3. O papel le a trilha completa e nunca escreve. A coluna nao esgota a exclusividade de papel: parceiro_externo tambem nao acumula com papel de escrita e nao esta marcado aqui, porque assina autorizacao. Quem decide a exclusividade e public.validar_exclusividade_do_papel(), que le esta coluna e mais o nome do papel. Defeito encontrado pela suite pgTAP do anexo 02b.';
 comment on column public.papeis.alcance is
   'Ordem usada pelo hook de token para escolher a claim user_role quando a pessoa tem varios papeis. Maior alcance vence.';
 
@@ -2082,6 +2101,57 @@ grant execute on function private.compartilha_vinculo(uuid) to authenticated;
 comment on function private.compartilha_vinculo(uuid) is
   'Verdadeiro quando quem esta logado e a pessoa consultada tem, cada um, vinculo vigente no mesmo espaco, com estado diferente de terminated e fim nulo ou futuro. Sustenta a policy profiles_select_vinculo: pertencimento provado por vinculos, nunca por workspace_members, que barra todo voluntario.';
 
+-- As duas funcoes abaixo existem porque public.profiles_diretorio e
+-- security_invoker: o exists direto em public.usuario_papeis e o exists direto
+-- em public.consentimentos eram avaliados com o RLS de quem consulta, e nenhuma
+-- das duas policies abre a linha de outra pessoa. O resultado era diretorio
+-- vazio no alcance minimo e telefone invisivel para a Secretaria. Cada uma
+-- responde so o booleano da pergunta e nunca devolve a linha nem lista de dado
+-- pessoal, que e o mesmo desenho de private.compartilha_vinculo acima.
+
+create or replace function private.exerce_coordenacao_ou_secretaria(p_profile_id uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.usuario_papeis up
+    where up.user_id = p_profile_id
+      and up.papel in ('coordenador','secretaria')
+      and up.inicio <= now()
+      and (up.fim is null or up.fim > now())
+  );
+$$;
+
+revoke all on function private.exerce_coordenacao_ou_secretaria(uuid) from public, anon;
+grant execute on function private.exerce_coordenacao_ou_secretaria(uuid) to authenticated;
+
+comment on function private.exerce_coordenacao_ou_secretaria(uuid) is
+  'Verdadeiro quando a pessoa consultada tem concessao vigente do papel coordenador ou do papel secretaria. Existe porque o ramo de alcance minimo de public.profiles_diretorio consultava public.usuario_papeis direto e a view e security_invoker: a policy usuario_papeis_select_proprio so devolve a cada pessoa os papeis dela mesma, entao o exists dava falso e o recem-chegado, o voluntario inativo e o parceiro externo abriam /pessoas sem encontrar ninguem com quem falar, ao contrario do que a secao 5.2 promete. Devolve so o booleano da pergunta: nunca a linha de usuario_papeis, nunca a lista de papeis de terceiro. Defeito encontrado pela suite pgTAP do anexo 02b.';
+
+create or replace function private.tem_consentimento_vigente(p_profile_id uuid, p_finalidade text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.consentimentos c
+    where c.profile_id = p_profile_id
+      and c.finalidade = p_finalidade
+      and c.revogado_em is null
+  );
+$$;
+
+revoke all on function private.tem_consentimento_vigente(uuid, text) from public, anon;
+grant execute on function private.tem_consentimento_vigente(uuid, text) to authenticated;
+
+comment on function private.tem_consentimento_vigente(uuid, text) is
+  'Verdadeiro quando existe consentimento daquela finalidade para aquela pessoa sem revogado_em, isto e, a linha que o indice unico parcial consentimentos_vigente_idx mantem unica. Existe porque public.profiles_diretorio checava o consentimento com um exists direto em public.consentimentos e a view e security_invoker: a policy consentimentos_select_titular so abre a linha para o titular e para quem tem lgpd.responder_titular ou trilha.ler_completa, permissoes que o seed da ao administrador e nao da a secretaria, entao o telefone aparecia para o administrador e sumia para a Secretaria, contra a secao 6.6, que nomeia secretaria e administrador como quem tem pessoa.ver_restrito. Nao afrouxa nada: devolve so um booleano, nunca a versao da politica, a evidencia ou a data, e as tres condicoes cumulativas de 6.6 continuam inteiras na view, inclusive a de pessoa.ver_restrito. Defeito encontrado pela suite pgTAP do anexo 02b.';
+
 create or replace function public.registrar_verificacao_mfa()
 returns void
 language plpgsql
@@ -2148,12 +2218,7 @@ select
       or (
         (select public.autorizar('pessoa.ver_restrito'))
         and p.telefone_visivel
-        and exists (
-          select 1 from public.consentimentos c
-          where c.profile_id = p.id
-            and c.finalidade = 'telefone_no_diretorio'
-            and c.revogado_em is null
-        )
+        and (select private.tem_consentimento_vigente(p.id, 'telefone_no_diretorio'))
       )
     then p.telefone
   end as telefone
@@ -2180,13 +2245,7 @@ where p.eliminado_em is null
     )
     else (
       p.id = (select auth.uid())
-      or exists (
-        select 1 from public.usuario_papeis up
-        where up.user_id = p.id
-          and up.papel in ('coordenador','secretaria')
-          and up.inicio <= now()
-          and (up.fim is null or up.fim > now())
-      )
+      or (select private.exerce_coordenacao_ou_secretaria(p.id))
       or exists (
         select 1
         from public.vinculos vv
@@ -2200,7 +2259,7 @@ where p.eliminado_em is null
   end;
 
 comment on view public.profiles_diretorio is
-  'O diretorio de /pessoas. Aplica os dois lados da regra, e nao so o da pessoa olhada. Do lado de quem e olhado: ninguem aparece antes de vinculos.estado = active, desligado e eliminado somem no mesmo instante, e conta de tipo servico nunca aparece. Do lado de quem consulta, private.alcance_do_diretorio() decide: com completo valem as regras de visibilidade_diretorio, que prevalece sobre o papel de quem olha exceto para quem tem pessoa.ver_restrito; com setor so aparece quem private.mesmo_setor confirma; com minimo so aparecem coordenador e secretaria vigentes e quem tem vinculo no setor de slug voluntariado. Telefone sai para a propria pessoa e, fora dela, so para quem tem pessoa.ver_restrito, e ainda assim so com telefone_visivel e consentimento vigente de finalidade telefone_no_diretorio sem revogado_em; e-mail mantem a regra de email_visivel. security_invoker para que o RLS de quem consulta continue valendo. Nunca expoe public.profiles_restritos.';
+  'O diretorio de /pessoas. Aplica os dois lados da regra, e nao so o da pessoa olhada. Do lado de quem e olhado: ninguem aparece antes de vinculos.estado = active, desligado e eliminado somem no mesmo instante, e conta de tipo servico nunca aparece. Do lado de quem consulta, private.alcance_do_diretorio() decide: com completo valem as regras de visibilidade_diretorio, que prevalece sobre o papel de quem olha exceto para quem tem pessoa.ver_restrito; com setor so aparece quem private.mesmo_setor confirma; com minimo so aparecem coordenador e secretaria vigentes e quem tem vinculo no setor de slug voluntariado. Telefone sai para a propria pessoa e, fora dela, so para quem tem pessoa.ver_restrito, e ainda assim so com telefone_visivel e consentimento vigente de finalidade telefone_no_diretorio sem revogado_em; e-mail mantem a regra de email_visivel. security_invoker para que o RLS de quem consulta continue valendo. Nunca expoe public.profiles_restritos. As duas perguntas que a view faz sobre terceiro passaram a ser feitas por funcao security definer de private, e nao por exists direto na tabela: como a view e security_invoker, o exists em public.usuario_papeis e o exists em public.consentimentos eram avaliados com o RLS de quem consulta e davam falso, deixando o alcance minimo sem ninguem para falar e a Secretaria sem telefone. Agora sao private.exerce_coordenacao_ou_secretaria(uuid) e private.tem_consentimento_vigente(uuid, text), que devolvem so um booleano. Nenhuma condicao foi afrouxada: o telefone continua exigindo as tres condicoes cumulativas de 6.6. Defeito encontrado pela suite pgTAP do anexo 02b.';
 
 
 -- ============================================================
@@ -3766,6 +3825,56 @@ create trigger avisos_conta_de_servico
   before insert or update on public.avisos
   for each row execute function public.avisos_conta_de_servico();
 
+-- 9.7 Quem aprova assina a aprovacao com o proprio uuid.
+--     A regra morava no with check de avisos_update_moderacao, que consultava
+--     public.avisos para descobrir o valor antigo de aprovado_por. Policy que
+--     le a propria tabela protegida e recursao infinita (42P17), e com ela
+--     nenhuma sessao conseguia alterar aviso nenhum: editar rascunho, aprovar,
+--     devolver, fixar e arquivar paravam todos no mesmo erro. Comparar old com
+--     new e trabalho de gatilho, que ja recebe os dois valores e nao dispara
+--     policy nenhuma. Defeito encontrado pela suite pgTAP do anexo 02b (teste
+--     66).
+create or replace function public.avisos_assinatura_da_aprovacao()
+returns trigger language plpgsql
+-- security definer pelo mesmo motivo de public.avisos_conta_de_servico: gatilho
+-- roda com os privilegios de quem escreve, e o papel authenticated nao tem
+-- usage no schema auth neste ambiente, entao auth.uid() chamada aqui sem
+-- definer recusaria todo update de aviso feito pela borda. search_path vazio
+-- porque funcao com search_path mutavel e vetor de sequestro de nome de objeto.
+security definer
+set search_path = ''
+as $$
+declare
+  v_ator uuid := (select auth.uid());
+begin
+  -- Job de pg_cron e rotina de servico rodam sem JWT: nao ha assinatura a
+  -- conferir, e nesses caminhos quem responde e a funcao chamadora.
+  if v_ator is null then
+    return new;
+  end if;
+
+  -- Manter o valor que ja estava gravado e permitido: e o que deixa outro
+  -- moderador arquivar ou fixar um aviso aprovado por um colega. Trocar a
+  -- assinatura por uuid de terceiro, nao.
+  if new.aprovado_por is distinct from old.aprovado_por
+     and new.aprovado_por is not null
+     and new.aprovado_por <> v_ator then
+    raise exception 'avisos: quem aprova assina a aprovacao com o proprio uuid'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.avisos_assinatura_da_aprovacao() is
+  'Recusa gravar em avisos.aprovado_por uuid que nao seja o de quem esta agindo, aceitando manter o valor anterior e limpar para nulo na devolucao. Nasceu para tirar essa comparacao do with check da policy avisos_update_moderacao, que descobria o valor antigo com um select em public.avisos e por isso caia em recursao infinita de policy (42P17), travando todo update de aviso por authenticated: o defeito foi encontrado pela suite pgTAP do anexo 02b (teste 66). Como gatilho, a regra fica mais forte do que era na policy, porque vale tambem para o caminho do autor e para as RPC security definer, e mais barata, porque compara old e new sem tocar na tabela. security definer porque gatilho executa com o privilegio de quem escreve e o papel authenticated nao alcanca o schema auth: sem isso a chamada a auth.uid() recusaria todo update de aviso vindo da borda.';
+
+drop trigger if exists avisos_assinatura_da_aprovacao on public.avisos;
+create trigger avisos_assinatura_da_aprovacao
+  before update on public.avisos
+  for each row execute function public.avisos_assinatura_da_aprovacao();
+
 
 -- ============================================================================
 -- 10. Funcoes auxiliares em private
@@ -3805,8 +3914,19 @@ returns boolean language sql security definer set search_path = '' stable as $$
       -- Espaco, pela funcao da parte base: workspace_members nao serve, porque
       -- o voluntario que entrou por convite nunca ganha linha nela.
       and (select private.pertence_ao_espaco(a.workspace_id))
-      -- So o que ja saiu da redacao aparece no mural
-      and a.status in ('published','expired','archived')
+      -- So o que ja saiu da redacao aparece no mural, e o publicado so
+      -- aparece dentro da janela de vigencia: o aviso cuja vigencia_fim passou
+      -- ontem sai do mural no instante em que vence, sem depender de o job
+      -- diario da secao 8.3 ja ter rodado. Expirado e arquivado sao historico
+      -- e continuam legiveis a quem podia le-los, como diz o comentario de
+      -- public.avisos, e por isso ficam fora da janela.
+      -- Defeito encontrado pela suite pgTAP do anexo 02b (teste 61).
+      and (
+        (a.status = 'published'
+         and a.vigencia_inicio <= now()
+         and a.vigencia_fim > now())
+        or a.status in ('expired','archived')
+      )
       -- Visibilidade do grupo: publica abre o mural a qualquer membro do
       -- espaco; comunidade abre so o Sobre; membros esconde tudo.
       and (
@@ -3866,7 +3986,7 @@ comment on function private.is_grupo_membro(uuid) is
 comment on function private.papel_no_grupo(uuid) is
   'Papel da pessoa da sessao no grupo: dono, admin, moderador ou membro. Papeis do Space do HumHub.';
 comment on function private.aviso_visivel(uuid) is
-  'Combina estado do aviso, pertencimento ao espaco por private.pertence_ao_espaco, visibilidade do grupo, pertencimento ao grupo e os segmentos de aviso_publicos com setor, papel, vinculo e grupos da pessoa da sessao. E a unica porta de leitura do mural. No segmento de setor, a prova de pertencimento e apenas public.vinculos com estado active e fim nulo ou futuro: profiles.setor_principal_id nao vale como prova porque a policy profiles_update_self da Redacao deixa a propria pessoa gravar essa coluna, e um voluntario que se colocasse no setor Diretoria passaria a ler os avisos segmentados a ela.';
+  'Combina estado e vigencia do aviso, pertencimento ao espaco por private.pertence_ao_espaco, visibilidade do grupo, pertencimento ao grupo e os segmentos de aviso_publicos com setor, papel, vinculo e grupos da pessoa da sessao. E a unica porta de leitura do mural. No segmento de setor, a prova de pertencimento e apenas public.vinculos com estado active e fim nulo ou futuro: profiles.setor_principal_id nao vale como prova porque a policy profiles_update_self da Redacao deixa a propria pessoa gravar essa coluna, e um voluntario que se colocasse no setor Diretoria passaria a ler os avisos segmentados a ela. A vigencia entra na propria condicao de leitura, e nao so no job diario: aviso em published aparece apenas entre vigencia_inicio e vigencia_fim, porque o cron roda uma vez por dia e a visibilidade nao pode depender de ele ja ter passado; expired e archived, que sao historico, ficam fora dessa janela e continuam legiveis. Defeito encontrado pela suite pgTAP do anexo 02b (teste 61).';
 
 revoke all on function private.is_grupo_membro(uuid) from public, anon;
 revoke all on function private.papel_no_grupo(uuid)  from public, anon;
@@ -4125,17 +4245,19 @@ create policy avisos_update_moderacao on public.avisos for update to authenticat
     -- snapshot de leitura, as notificacoes e a fila de e-mail na mesma
     -- transacao; esta policy cobre a publicacao manual e o arquivamento.
     and (status <> 'published' or (select private.exige_aal2()))
-    -- Quem aprova assina a aprovacao com o proprio uuid.
-    and (aprovado_por is null or aprovado_por = (select auth.uid())
-         or aprovado_por = (select a.aprovado_por from public.avisos a where a.id = avisos.id))
+    -- A assinatura da aprovacao (aprovado_por so recebe o uuid de quem aprova)
+    -- saiu daqui para o gatilho public.avisos_assinatura_da_aprovacao: a regra
+    -- compara o valor antigo com o novo, e ler avisos de dentro de uma policy
+    -- de avisos era recursao infinita (42P17) que travava todo update da
+    -- tabela. Defeito encontrado pela suite pgTAP do anexo 02b (teste 66).
   );
 
 -- Sem policy de delete: arquivar e update de status e de arquivado_em.
 
 comment on policy avisos_select_visivel on public.avisos is
-  'Leitura do mural por private.aviso_visivel: estado publicado, expirado ou arquivado, mais visibilidade do grupo, mais a uniao dos segmentos de aviso_publicos.';
+  'Leitura do mural por private.aviso_visivel: publicado dentro da janela de vigencia, ou expirado ou arquivado, mais visibilidade do grupo, mais a uniao dos segmentos de aviso_publicos. A janela de vigencia entrou na funcao porque a suite pgTAP do anexo 02b (teste 61) mostrou aviso com vigencia encerrada ontem ainda visivel ao destinatario.';
 comment on policy avisos_update_moderacao on public.avisos is
-  'Publicar, aprovar, devolver e arquivar. Levar o aviso a published exige private.exige_aal2(), a mesma regra das demais decisoes da intranet.';
+  'Publicar, aprovar, devolver e arquivar. Levar o aviso a published exige private.exige_aal2(), a mesma regra das demais decisoes da intranet. A conferencia de aprovado_por nao mora mais aqui: comparar o valor antigo com o novo obrigava a policy a consultar public.avisos, o que e recursao infinita em policy (42P17) e travava todo update de aviso, defeito encontrado pela suite pgTAP do anexo 02b (teste 66). A regra passou integra para o gatilho before update public.avisos_assinatura_da_aprovacao, que ja tem old e new em maos e vale para todo caminho de escrita, inclusive o do autor.';
 
 
 -- ---------- aviso_publicos ----------
@@ -4221,7 +4343,23 @@ create policy aviso_leituras_select_relatorio on public.aviso_leituras for selec
         -- guardar nome: seguranca operacional ou obrigacao legal.
         and a.motivo_obrigatoriedade in ('seguranca_operacional','obrigacao_legal')
         and (
-          a.autor_id = (select auth.uid())
+          -- A secao 8.2 do escopo nomeia quem le a lista nominal de quem nao
+          -- confirmou: "apenas a secretaria e a administrador". A linha da
+          -- secretaria em 5.2 repete o mesmo ("ve a lista nominal de leitura
+          -- pendente"). A correcao ficou na policy, e nao no seed de
+          -- papel_permissoes: dar mural.ver_relatorio a secretaria faria a
+          -- Secretaria passar tambem por avisos_select_gestao, lendo o rascunho
+          -- e o aviso devolvido de todos os murais, e por
+          -- public.relatorio_leitura_aviso em todos os setores, dois alcances
+          -- que nem 8.2 nem 5.2 lhe dao. Nomear os dois papeis por
+          -- private.tem_papel e a excecao ja declarada no comentario dessa
+          -- funcao, para quando a permissao nomeada nao basta. Continuam
+          -- valendo, para todos, pessoa.ver_restrito e o motivo de
+          -- obrigatoriedade restrito a seguranca operacional ou obrigacao
+          -- legal. Defeito encontrado pela suite pgTAP do anexo 02b (teste 100).
+          (select private.tem_papel('secretaria'))
+          or (select private.tem_papel('administrador'))
+          or a.autor_id = (select auth.uid())
           or (select private.papel_no_grupo(a.grupo_id)) in ('dono','admin','moderador')
           or (select public.autorizar('mural.ver_relatorio'::public.permissao,
                 (select g.setor_id from public.grupos g where g.id = a.grupo_id)))
@@ -4262,7 +4400,7 @@ create policy aviso_leituras_update_propria on public.aviso_leituras for update 
 comment on policy aviso_leituras_insert_propria on public.aviso_leituras is
   'Marcar como visto e ato da propria pessoa. O snapshot de destinatarios obrigatorios da publicacao entra por public.publicar_aviso, security definer, fora do alcance do cliente, para que a taxa do relatorio nao possa ser fabricada.';
 comment on policy aviso_leituras_select_relatorio on public.aviso_leituras is
-  'Numero, percentual e distribuicao por setor continuam disponiveis ao autor, ao dono, admin e moderador do grupo e a quem tem mural.ver_relatorio no setor, mas pela funcao agregada public.relatorio_leitura_aviso, que nunca devolve user_id. A leitura das linhas individuais, essas sim nominais, exige pessoa.ver_restrito e aviso com motivo_obrigatoriedade igual a seguranca_operacional ou obrigacao_legal. O motivo: historico nominal de atraso de leitura cobrado de quem presta servico voluntario aproxima o registro de controle de jornada e excede a minimizacao do art. 6, III, da LGPD.';
+  'Numero, percentual e distribuicao por setor continuam disponiveis ao autor, ao dono, admin e moderador do grupo e a quem tem mural.ver_relatorio no setor, mas pela funcao agregada public.relatorio_leitura_aviso, que nunca devolve user_id. A leitura das linhas individuais, essas sim nominais, exige pessoa.ver_restrito e aviso com motivo_obrigatoriedade igual a seguranca_operacional ou obrigacao_legal. O motivo: historico nominal de atraso de leitura cobrado de quem presta servico voluntario aproxima o registro de controle de jornada e excede a minimizacao do art. 6, III, da LGPD. Alem disso a policy nomeia agora, por private.tem_papel, os dois papeis a quem a secao 8.2 reserva a lista nominal, secretaria e administrador: o seed dava a secretaria so mural.publicar e ela ficava sem a lista que 5.2 lhe atribui. A correcao ficou aqui, e nao no seed de papel_permissoes, porque conceder mural.ver_relatorio a secretaria a levaria tambem a avisos_select_gestao e ao relatorio agregado de todos os setores, alcances que o escopo nao lhe da. Defeito encontrado pela suite pgTAP do anexo 02b (teste 100).';
 
 
 -- ---------- comentarios ----------
@@ -4423,6 +4561,8 @@ declare
   v_tipo             text;
   v_prioridade_email text;
   v_total            integer := 0;
+  v_agendar          boolean;
+  v_destinatarios    uuid[];
 begin
   if v_ator is null then
     raise exception 'publicar_aviso: sem sessao';
@@ -4461,32 +4601,27 @@ begin
     raise exception 'publicar_aviso: leitura obrigatoria exige motivo_obrigatoriedade';
   end if;
 
-  -- 1. Estado e carimbo.
+  -- 1. Estado e carimbo. Aviso cuja vigencia so comeca depois de hoje nao vira
+  --    publicacao imediata: entra em scheduled e o job diario de pg_cron o
+  --    publica no dia de vigencia_inicio, que e a transicao "draft para
+  --    scheduled quando vigencia_inicio e futura" e "scheduled para published
+  --    pelo cron" da secao 8.3 do escopo, o mesmo estado que o indice parcial
+  --    avisos_agendados_idx ja preve. Defeito encontrado pela suite pgTAP do
+  --    anexo 02b (teste 79).
+  v_agendar := v_aviso.vigencia_inicio > now();
+
   update public.avisos a
-     set status       = 'published',
-         publicado_em = coalesce(a.publicado_em, now())
+     set status       = case when v_agendar then 'scheduled' else 'published' end,
+         publicado_em = case when v_agendar then a.publicado_em
+                             else coalesce(a.publicado_em, now()) end
    where a.id = v_aviso.id
   returning a.* into v_aviso;
 
-  -- 2. Snapshot dos destinatarios: os segmentos de aviso_publicos resolvidos
-  --    em pessoas, na uniao (ArticoloSegmento do Jorvik). Sem segmento, todos
-  --    os membros do grupo. Pertencimento a setor prova-se por vinculo
-  --    vigente, nunca por profiles.setor_principal_id.
-  insert into public.aviso_leituras (
-    workspace_id, aviso_id, user_id, setor_id, obrigatoria, versao
-  )
-  select
-    v_aviso.workspace_id,
-    v_aviso.id,
-    d.user_id,
-    (select v.setor_id from public.vinculos v
-      where v.profile_id = d.user_id
-        and v.estado = 'active'
-        and (v.fim is null or v.fim > now())
-      order by v.inicio desc
-      limit 1),
-    v_aviso.leitura_obrigatoria,
-    v_aviso.versao
+  -- 2. Destinatarios: os segmentos de aviso_publicos resolvidos em pessoas, na
+  --    uniao (ArticoloSegmento do Jorvik). Sem segmento, todos os membros do
+  --    grupo. Pertencimento a setor prova-se por vinculo vigente, nunca por
+  --    profiles.setor_principal_id.
+  select array_agg(d.user_id) into v_destinatarios
   from (
     select distinct gm.user_id
     from public.grupo_membros gm
@@ -4532,7 +4667,36 @@ begin
             )
         )
       )
-  ) d
+  ) d;
+
+  v_total := coalesce(array_length(v_destinatarios, 1), 0);
+
+  -- Agendado para o futuro: nada de snapshot, sino nem fila de e-mail hoje. O
+  -- congelamento da lista e o setor_id "daquele instante" da secao 8.2 sao do
+  -- instante da publicacao, entao quem entrar no mural ate la ainda entra na
+  -- foto, e a cobranca de leitura nao comeca antes de o aviso existir no mural.
+  -- Devolve o alcance de hoje, que e o que a tela de agendamento mostra.
+  if v_agendar then
+    return v_total;
+  end if;
+
+  -- 3. Snapshot dos destinatarios, congelado no instante da publicacao.
+  insert into public.aviso_leituras (
+    workspace_id, aviso_id, user_id, setor_id, obrigatoria, versao
+  )
+  select
+    v_aviso.workspace_id,
+    v_aviso.id,
+    d.user_id,
+    (select v.setor_id from public.vinculos v
+      where v.profile_id = d.user_id
+        and v.estado = 'active'
+        and (v.fim is null or v.fim > now())
+      order by v.inicio desc
+      limit 1),
+    v_aviso.leitura_obrigatoria,
+    v_aviso.versao
+  from unnest(v_destinatarios) as d(user_id)
   on conflict (aviso_id, user_id, versao) do nothing;
 
   select count(*) into v_total
@@ -4548,7 +4712,7 @@ begin
   v_prioridade_email := case when v_aviso.prioridade = 'urgente'
                              then 'imediato' else 'resumo' end;
 
-  -- 3 e 4. Sino e fila de e-mail, na mesma instrucao, para que nenhuma
+  -- 4 e 5. Sino e fila de e-mail, na mesma instrucao, para que nenhuma
   --        notificacao fique sem entrega e nenhuma entrega fique sem sino.
   with novas as (
     insert into public.notifications (
@@ -4581,7 +4745,7 @@ end;
 $$;
 
 comment on function public.publicar_aviso(uuid) is
-  'Publica um aviso e faz, na mesma transacao: confere public.autorizar(mural.publicar, setor do grupo) e private.exige_aal2(); move o aviso de draft, pending_approval ou scheduled para published carimbando publicado_em; resolve os segmentos de aviso_publicos em pessoas; grava o snapshot em aviso_leituras com obrigatoria igual a avisos.leitura_obrigatoria, versao igual a versao corrente e setor_id do instante; insere as linhas de notifications dos destinatarios; e enfileira operacao.fila_emails com prioridade imediato quando o aviso e urgente e resumo nos demais casos. Existe porque a policy aviso_leituras_insert_propria proibe obrigatoria = true: sem esta funcao, a leitura obrigatoria nao teria caminho de criacao nenhum. Devolve o numero de destinatarios do snapshot.';
+  'Publica um aviso e faz, na mesma transacao: confere public.autorizar(mural.publicar, setor do grupo) e private.exige_aal2(); quando vigencia_inicio ainda e futura move o aviso para scheduled, sem carimbar publicado_em e sem snapshot, notificacao ou fila de e-mail, deixando a publicacao para o job diario da secao 8.3, e devolve so o alcance de hoje, defeito encontrado pela suite pgTAP do anexo 02b (teste 79); nos demais casos move o aviso de draft, pending_approval ou scheduled para published carimbando publicado_em; resolve os segmentos de aviso_publicos em pessoas; grava o snapshot em aviso_leituras com obrigatoria igual a avisos.leitura_obrigatoria, versao igual a versao corrente e setor_id do instante; insere as linhas de notifications dos destinatarios; e enfileira operacao.fila_emails com prioridade imediato quando o aviso e urgente e resumo nos demais casos. Existe porque a policy aviso_leituras_insert_propria proibe obrigatoria = true: sem esta funcao, a leitura obrigatoria nao teria caminho de criacao nenhum. Devolve o numero de destinatarios do snapshot.';
 
 -- 13.2 Notificacao de terceiro, o que a policy notifications_insert_own veda.
 create or replace function public.registrar_notificacoes(
@@ -4705,12 +4869,19 @@ begin
     raise exception 'relatorio_leitura_aviso: fora do espaco do aviso';
   end if;
 
-  if not (
+  -- coalesce duas vezes, e nao por gosto: private.papel_no_grupo devolve nulo
+  -- para quem nao e membro do grupo, e nulo nao e falso. Sem o coalesce a
+  -- disjuncao inteira virava nulo, "if not null" nunca disparava e o
+  -- colaborador sem papel nenhum no setor lia o relatorio inteiro. Mesmo
+  -- padrao ja adotado na trilha do documento. Defeito encontrado pela suite
+  -- pgTAP do anexo 02b (teste 97).
+  if not coalesce(
     v_aviso.autor_id = (select auth.uid())
-    or (select private.papel_no_grupo(v_aviso.grupo_id)) in ('dono','admin','moderador')
+    or coalesce((select private.papel_no_grupo(v_aviso.grupo_id)), '')
+         in ('dono','admin','moderador')
     or (select public.autorizar('mural.ver_relatorio'::public.permissao,
           (select g.setor_id from public.grupos g where g.id = v_aviso.grupo_id)))
-  ) then
+  , false) then
     raise exception 'relatorio_leitura_aviso: exige autoria, papel no grupo ou mural.ver_relatorio no setor';
   end if;
 
@@ -4742,7 +4913,7 @@ end;
 $$;
 
 comment on function public.relatorio_leitura_aviso(uuid) is
-  'Numero, percentual e distribuicao por setor da leitura obrigatoria de um aviso, com a linha de setor_id nulo carregando o total. Nunca devolve user_id. E o caminho do relatorio para o autor, para o dono, admin e moderador do grupo e para quem tem mural.ver_relatorio no setor, depois que a policy aviso_leituras_select_relatorio passou a exigir pessoa.ver_restrito para as linhas nominais: contar quantos leram e minimizacao (LGPD, art. 6, III); listar quem ainda nao leu, com nome, e historico nominal de atraso de quem presta servico voluntario, que aproxima o registro de controle de jornada.';
+  'Numero, percentual e distribuicao por setor da leitura obrigatoria de um aviso, com a linha de setor_id nulo carregando o total. Nunca devolve user_id. E o caminho do relatorio para o autor, para o dono, admin e moderador do grupo e para quem tem mural.ver_relatorio no setor, depois que a policy aviso_leituras_select_relatorio passou a exigir pessoa.ver_restrito para as linhas nominais: contar quantos leram e minimizacao (LGPD, art. 6, III); listar quem ainda nao leu, com nome, e historico nominal de atraso de quem presta servico voluntario, que aproxima o registro de controle de jornada. A guarda de autorizacao passou a fechar em coalesce: private.papel_no_grupo devolve nulo para quem nao e membro do grupo, a disjuncao inteira virava nulo e o if not nunca disparava, de modo que quem nao entrou no mural nem tinha mural.ver_relatorio no setor lia o relatorio. Defeito encontrado pela suite pgTAP do anexo 02b (teste 97).';
 
 revoke all on function public.publicar_aviso(uuid)                            from public, anon;
 revoke all on function public.registrar_notificacoes(text, text, uuid, uuid[]) from public, anon;
@@ -7791,6 +7962,64 @@ create trigger ancoras_toca_atualizado_em
 -- 5. Registro de eventos e verificador
 -- ============================================================================
 
+-- Caminho de escrita da trilha para quem age pela borda. Existe porque o insert
+-- de auditoria.registrar_evento precisa devolver seq, e num insert com returning
+-- o Postgres tambem aplica a policy de select da tabela: eventos_select_auditor
+-- so e verdadeira para quem tem trilha.ler_completa, entao a colaboradora comum
+-- recebia 42501 ao gravar o proprio evento e o tramite inteiro das fases 4 e 5
+-- travava, porque toda RPC passa por aqui.
+create or replace function private.gravar_evento_da_sessao(
+  p_workspace_id    uuid,
+  p_fluxo           text,
+  p_entidade_tipo   text,
+  p_entidade_id     uuid,
+  p_acao            text,
+  p_papel           text,
+  p_versao          integer,
+  p_antes           jsonb,
+  p_depois          jsonb,
+  p_hash_arquivo    text,
+  p_hash_decisao    text,
+  p_ip_hash         text,
+  p_user_agent_hash text
+) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_ator uuid := (select auth.uid());
+  v_seq  bigint;
+begin
+  -- A condicao de escrita nao afrouxa: e a mesma de eventos_insert_proprio_ator,
+  -- reconferida aqui porque o definer passa por cima do RLS da tabela. O ator sai
+  -- da sessao e nunca de parametro, entao continua sendo impossivel gravar evento
+  -- em nome de terceiro. A regra de leitura da trilha fica intacta: quem nao tem
+  -- trilha.ler_completa escreve e nao le.
+  if v_ator is null then
+    raise exception 'Evento de pessoa exige sessao autenticada; evento sem ator humano entra por auditoria.registrar_evento_do_sistema.'
+      using errcode = '42501';
+  end if;
+  if not private.is_workspace_member(p_workspace_id) then
+    raise exception 'Evento so entra na trilha do espaco de trabalho de que a pessoa participa.'
+      using errcode = '42501';
+  end if;
+
+  insert into auditoria.eventos (
+    workspace_id, fluxo, entidade_tipo, entidade_id, versao, ator_id, papel, acao,
+    antes, depois, hash_arquivo, hash_decisao, ip_hash, user_agent_hash,
+    hash_anterior, hash_linha
+  ) values (
+    p_workspace_id, p_fluxo, p_entidade_tipo, p_entidade_id, p_versao,
+    v_ator, p_papel, p_acao,
+    p_antes, p_depois, p_hash_arquivo, p_hash_decisao,
+    p_ip_hash, p_user_agent_hash,
+    repeat('0', 64), repeat('0', 64)
+  )
+  returning seq into v_seq;
+  return v_seq;
+end;
+$$;
+
+comment on function private.gravar_evento_da_sessao(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, text, text) is 'Caminho de escrita da trilha para o ator da sessao, no padrao das demais auxiliares de private: security definer com search_path vazio. Nasceu de defeito encontrado pela suite pgTAP do anexo 02b, teste 92 (uma colaboradora comum consegue gravar o proprio evento na trilha): auditoria.registrar_evento devolve seq por returning, e insert com returning tambem passa pela policy de select, que so e verdadeira para quem tem trilha.ler_completa; o resultado era 42501 para quem nao e auditor, administrador ou encarregado, e como toda RPC das fases 4 e 5 chama o ajudante, abrir, submeter, decidir, retirar, assinar e publicar travavam. So o caminho da escrita mudou: a regra de leitura de auditoria.eventos continua sendo eventos_select_auditor, e as duas condicoes de eventos_insert_proprio_ator (ator igual ao da sessao e pertencimento ao espaco) sao reconferidas aqui, com o ator lido de auth.uid() e nunca de parametro.';
+
 create or replace function auditoria.registrar_evento(
   p_workspace_id  uuid,
   p_fluxo         text,
@@ -7807,25 +8036,16 @@ create or replace function auditoria.registrar_evento(
   p_user_agent    text default null
 ) returns bigint
 language plpgsql security invoker set search_path = '' as $$
-declare v_seq bigint;
 begin
-  insert into auditoria.eventos (
-    workspace_id, fluxo, entidade_tipo, entidade_id, versao, ator_id, papel, acao,
-    antes, depois, hash_arquivo, hash_decisao, ip_hash, user_agent_hash,
-    hash_anterior, hash_linha
-  ) values (
-    p_workspace_id, p_fluxo, p_entidade_tipo, p_entidade_id, p_versao,
-    (select auth.uid()), p_papel, p_acao,
+  return private.gravar_evento_da_sessao(
+    p_workspace_id, p_fluxo, p_entidade_tipo, p_entidade_id, p_acao, p_papel, p_versao,
     p_antes, p_depois, p_hash_arquivo, p_hash_decisao,
-    public.hash_curto(host(p_ip)), public.hash_curto(p_user_agent),
-    repeat('0', 64), repeat('0', 64)
-  )
-  returning seq into v_seq;
-  return v_seq;
+    public.hash_curto(host(p_ip)), public.hash_curto(p_user_agent)
+  );
 end;
 $$;
 
-comment on function auditoria.registrar_evento(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, inet, text) is 'Helper security invoker das RPCs e de lib/auditoria/registrar.ts. hash_anterior e hash_linha entram como marcador e sao substituidos pelo trigger de encadeamento; o RLS continua valendo, entao ninguem grava evento em nome de terceiro.';
+comment on function auditoria.registrar_evento(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, inet, text) is 'Helper das RPCs e de lib/auditoria/registrar.ts, que continua sendo a porta unica de escrita da trilha por pessoa: hasheia IP e agente e delega a gravacao a private.gravar_evento_da_sessao. O insert deixou de acontecer aqui por defeito que a suite pgTAP do anexo 02b apontou no teste 92: com returning seq o Postgres aplica tambem a policy de select da trilha, e quem nao tem trilha.ler_completa levava 42501 ao gravar o proprio evento, travando todo o tramite das fases 4 e 5. hash_anterior e hash_linha entram como marcador e sao substituidos pelo trigger de encadeamento, e ninguem grava evento em nome de terceiro, porque o ator sai de auth.uid() dentro da auxiliar.';
 
 create or replace function auditoria.registrar_evento_do_sistema(
   p_workspace_id  uuid,
@@ -7939,16 +8159,27 @@ begin
 end;
 $$;
 
-comment on function auditoria.verificar_cadeia(text, text) is 'Verificador que percorre auditoria.eventos por fluxo e ordem_no_fluxo, recalcula hash_linha, confere hash_anterior e grava o resultado em auditoria.verificacoes (docs/04, secao 6). Roda por pg_cron uma vez ao dia e por pnpm auditoria:verificar contra dump restaurado no teste trimestral de restauracao.';
+comment on function auditoria.verificar_cadeia(text, text) is 'Verificador que percorre auditoria.eventos por fluxo e ordem_no_fluxo, recalcula hash_linha, confere hash_anterior e grava o resultado em auditoria.verificacoes (docs/04, secao 6). Roda por pg_cron uma vez ao dia e por pnpm auditoria:verificar contra dump restaurado no teste trimestral de restauracao. O execute e concedido a service_role, no mesmo degrau de public.processar_prazos_autorizacao, e continua revogado de public, anon e authenticated: sem ele o script de verificacao so rodava conectado como dono do banco, o que contraria a secao 10.5 do escopo e deixava o valor script de auditoria.verificacoes.origem sem quem o escrevesse. Falta apontada pela suite pgTAP do anexo 02b, secao 4, que exercita a funcao justamente com origem script.';
 
 revoke all on function auditoria.registrar_evento(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, inet, text) from public, anon;
+revoke all on function private.gravar_evento_da_sessao(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, text, text) from public, anon;
 revoke all on function auditoria.registrar_evento_do_sistema(uuid, text, text, uuid, text, integer, jsonb, jsonb, text, text) from public, anon, authenticated;
 revoke all on function auditoria.verificar_cadeia(text, text) from public, anon, authenticated;
 grant execute on function auditoria.registrar_evento(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, inet, text) to authenticated;
+grant execute on function private.gravar_evento_da_sessao(uuid, text, text, uuid, text, text, integer, jsonb, jsonb, text, text, text, text) to authenticated;
 -- Evento sem ator humano so sai do job: D39 manda os lembretes por rota da
 -- intranet chamada pelo cron da Vercel, e o caminho de contingencia sem pg_cron
 -- usa a chave de servico. Nem authenticated nem anon executam.
 grant execute on function auditoria.registrar_evento_do_sistema(uuid, text, text, uuid, text, integer, jsonb, jsonb, text, text) to service_role;
+-- O verificador tambem sai pela chave de servico, no mesmo degrau de
+-- public.processar_prazos_autorizacao: auditoria.verificacoes.origem admite
+-- 'script' e a secao 10.5 do escopo promete o pnpm auditoria:verificar rodando a
+-- mesma funcao contra dump restaurado, o que so o dono do banco conseguia fazer.
+-- Apontado pela suite pgTAP do anexo 02b, secao 4, que exercita
+-- auditoria.verificar_cadeia com origem 'script'. Nem authenticated nem anon
+-- executam: o verificador escreve em auditoria.verificacoes e grava evento de
+-- sistema na cadeia.
+grant execute on function auditoria.verificar_cadeia(text, text) to service_role;
 
 -- ============================================================================
 -- 6. public.autorizacao_regras
@@ -8493,6 +8724,20 @@ $$;
 
 comment on function private.pode_montar_etapas(uuid) is 'O snapshot de etapas e escrito pelo solicitante no ato da submissao, por RPC security invoker; depois disso so as transicoes e o job de prazo mexem nas etapas.';
 
+create or replace function private.pode_retirar_autorizacao(p_autorizacao_id uuid)
+returns boolean language sql security definer set search_path = '' stable as $$
+  select exists (
+    select 1 from public.autorizacoes a
+    where a.id = p_autorizacao_id
+      and a.solicitante_id = (select auth.uid())
+      and a.estado in ('draft','pending','in_review','in_validation','changes_requested')
+      and a.retirada_em is null
+      and a.concluida_em is null
+  );
+$$;
+
+comment on function private.pode_retirar_autorizacao(uuid) is 'Ser o solicitante e o pedido estar aberto, que e a condicao dupla da retirada na secao 10.2 do escopo, e a mesma que public.retirar_autorizacao ja conferia. Existe porque a policy autorizacao_decisoes_insert_retirada conferia so o solicitante e aceitava decisao withdrawn em pedido ja encerrado, com concluida_em preenchido: quem escrevesse direto na tabela, sem passar pela RPC, encerrava de novo um pedido approved. Defeito encontrado pela suite pgTAP do anexo 02b, na secao 7 (retirada), onde os testes vizinhos provam que a voluntaria sem segundo fator retira o proprio pedido leve e que ninguem retira o pedido de outra pessoa. A tela nunca foi autoridade: quem diz o que entra na tabela e a policy.';
+
 create or replace function private.pode_mover_autorizacao(p_autorizacao_id uuid)
 returns boolean language sql security definer set search_path = '' stable as $$
   select exists (
@@ -8519,6 +8764,7 @@ revoke all on function private.pode_decidir_etapa(uuid)          from public, an
 revoke all on function private.conflito_de_interesse(uuid)       from public, anon;
 revoke all on function private.autorizacao_visivel(uuid)         from public, anon;
 revoke all on function private.pode_montar_etapas(uuid)          from public, anon;
+revoke all on function private.pode_retirar_autorizacao(uuid)    from public, anon;
 revoke all on function private.pode_mover_autorizacao(uuid)      from public, anon;
 grant execute on function private.tem_papel(text, uuid)        to authenticated;
 grant execute on function private.delegacao_para(text, uuid)   to authenticated;
@@ -8526,6 +8772,7 @@ grant execute on function private.pode_decidir_etapa(uuid)     to authenticated;
 grant execute on function private.conflito_de_interesse(uuid)  to authenticated;
 grant execute on function private.autorizacao_visivel(uuid)    to authenticated;
 grant execute on function private.pode_montar_etapas(uuid)     to authenticated;
+grant execute on function private.pode_retirar_autorizacao(uuid) to authenticated;
 grant execute on function private.pode_mover_autorizacao(uuid) to authenticated;
 
 -- ============================================================================
@@ -8612,14 +8859,11 @@ create policy autorizacao_decisoes_insert_retirada on public.autorizacao_decisoe
     and ator_id = (select auth.uid())
     and decisao = 'withdrawn'
     and papel_exercido = 'solicitante'
-    and exists (
-      select 1 from public.autorizacoes a
-      where a.id = autorizacao_id and a.solicitante_id = (select auth.uid())
-    )
+    and (select private.pode_retirar_autorizacao(autorizacao_id))
   );
 
 comment on policy autorizacao_decisoes_insert_retirada on public.autorizacao_decisoes is
-  'Retirada nao e decisao: e ato do proprio solicitante sobre o proprio pedido, com decisao withdrawn e papel_exercido solicitante. Fica de proposito sem private.exige_aal2(): voluntario sem papel de aprovacao nao e obrigado a ativar TOTP e, com a exigencia, abriria um pedido leve e nunca conseguiria retira-lo, recebendo erro de RLS em vez de mensagem de produto. O segundo fator continua exigido em autorizacao_decisoes_insert_decisor.';
+  'Retirada nao e decisao: e ato do proprio solicitante sobre o proprio pedido aberto, com decisao withdrawn e papel_exercido solicitante. Fica de proposito sem private.exige_aal2(): voluntario sem papel de aprovacao nao e obrigado a ativar TOTP e, com a exigencia, abriria um pedido leve e nunca conseguiria retira-lo, recebendo erro de RLS em vez de mensagem de produto. O segundo fator continua exigido em autorizacao_decisoes_insert_decisor. A condicao do pedido estar aberto entrou por defeito encontrado pela suite pgTAP do anexo 02b, na secao 7 (retirada): a policy conferia so ser o solicitante, e uma decisao withdrawn entrava em pedido approved, ja com concluida_em preenchido, bastando escrever direto na tabela sem passar por public.retirar_autorizacao. A secao 10.2 do escopo diz que a policy confere ser o solicitante e o pedido estar aberto, e e a policy, nao a tela, quem decide o que entra. A dupla conferencia vive em private.pode_retirar_autorizacao, com a mesma lista de estados da RPC.';
 
 revoke all on table public.autorizacao_decisoes from public, anon;
 grant select, insert on table public.autorizacao_decisoes to authenticated;
@@ -8748,12 +8992,22 @@ begin
    where a.objeto_tipo = p_objeto_tipo and a.objeto_id = p_objeto_id;
   v_rodada := 1;
 
+  -- A chave nasce aqui, e nao por returning. Insert com returning tambem passa
+  -- pela policy de select da tabela, e autorizacoes_select_envolvido chama
+  -- private.autorizacao_visivel(id), que procura o pedido em public.autorizacoes:
+  -- dentro da mesma instrucao a linha ainda nao existe para essa consulta, a
+  -- regra devolvia falso e nenhum pedido nascia, nem para quem le a trilha
+  -- inteira. Gerando o uuid antes, o insert dispensa o returning, a policy de
+  -- insert continua sendo conferida inteira pelo Postgres e a visibilidade do
+  -- pedido depois de criado fica exatamente como estava.
+  v_id := pg_catalog.gen_random_uuid();
+
   insert into public.autorizacoes (
-    workspace_id, tipo, tipo_ato, regra_id, objeto_tipo, objeto_id, rodada, sequencia_do_objeto,
+    id, workspace_id, tipo, tipo_ato, regra_id, objeto_tipo, objeto_id, rodada, sequencia_do_objeto,
     solicitante_id, setor_id, estado, dados, tipo_gestao,
     nivel_assinatura_exigido, arquivar_em
   )
-  select v_regra.workspace_id, v_regra.tipo, p_tipo_ato, v_regra.id, p_objeto_tipo, p_objeto_id, v_rodada, v_sequencia,
+  select v_id, v_regra.workspace_id, v_regra.tipo, p_tipo_ato, v_regra.id, p_objeto_tipo, p_objeto_id, v_rodada, v_sequencia,
          (select auth.uid()), p_setor_id,
          case when v_regra.tipo = 'document' then 'draft' else 'pending' end,
          coalesce(p_dados, '{}'), v_regra.tipo_gestao_padrao,
@@ -8761,8 +9015,7 @@ begin
          case when v_regra.arquivar_apos_dias is null then null
               else now() + make_interval(days => v_regra.arquivar_apos_dias) end
     from (select 1) x
-    left join public.politicas_assinatura pa on pa.id = v_regra.politica_assinatura_id
-  returning id into v_id;
+    left join public.politicas_assinatura pa on pa.id = v_regra.politica_assinatura_id;
 
   -- Snapshot das etapas: regra alterada depois nao muda pedido em curso.
   for v_etapa in select * from jsonb_array_elements(v_regra.etapas) loop
@@ -8809,7 +9062,7 @@ begin
 end;
 $$;
 
-comment on function public.abrir_autorizacao(public.tipo_ato, text, uuid, uuid, jsonb) is 'Abre o pedido e copia as etapas da regra (snapshot). Tramite leve ja nasce com a etapa 1 aberta; documento nasce draft porque minuta nao tramita (SEI). security invoker: o RLS continua valendo dentro da funcao, como nas RPCs da Redacao.';
+comment on function public.abrir_autorizacao(public.tipo_ato, text, uuid, uuid, jsonb) is 'Abre o pedido e copia as etapas da regra (snapshot). Tramite leve ja nasce com a etapa 1 aberta; documento nasce draft porque minuta nao tramita (SEI). security invoker: o RLS continua valendo dentro da funcao, como nas RPCs da Redacao. A chave do pedido passou a ser gerada antes do insert, em vez de vir por returning id, por defeito encontrado pela suite pgTAP do anexo 02b, teste 93 (a solicitante abre um pedido leve pela funcao de abertura do tramite): num insert com returning o Postgres aplica tambem a policy de select, e autorizacoes_select_envolvido chama private.autorizacao_visivel(id), que procura o pedido na propria tabela; dentro da mesma instrucao a linha ainda nao existe para essa consulta, a regra devolvia falso e nenhum pedido nascia, nem para quem tem trilha.ler_completa. Sem o returning, autorizacoes_insert_solicitante continua sendo conferida inteira pelo banco e a visibilidade do pedido depois de criado nao mudou.';
 
 create or replace function public.submeter_documento(
   p_autorizacao_id uuid,
